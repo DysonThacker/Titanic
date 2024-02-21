@@ -1,0 +1,439 @@
+---
+title: "Titanic Survivors"
+author: "Dyson Thacker"
+date: "2024-02-07"
+output:
+  html_document:
+    number_sections: true
+    toc: true
+    toc_depth: 3
+---
+
+# Executive Summary
+
+About 38% of people in the Train dataset survived the sinking of the Titanic. A few variables were worthless while others held significant value. Specifically, first class passengers, women, and children under the age of 5 had a very high chance of survival.
+
+Our XGBoost model predicted Survival in the Test set with 77% accuracy.
+
+# Introduction
+
+Kaggle has an ongoing project where participants can make predictive models which predict the survival of passengers who were on the Titanic many years ago. In an effort to refresh my Data Science skills I gave it a shot.
+
+The dataset includes passenger characteristics such as age, ticket class, ticket price, and how many family members they had on board.
+
+
+# Load packages and import data
+
+```{r, warnings=FALSE, message=FALSE}
+setwd("/Users/dysonthacker/Documents/Job Stuff/Portfolio Projects/Titanic")
+
+library(ggplot2)
+library(readr)
+library(dplyr)
+library(reshape)
+library(fastDummies)
+library(caret)
+library(xgboost)
+```
+
+
+```{r}
+test <- read.csv("test.csv", stringsAsFactors = F)
+train <- read.csv("train.csv", stringsAsFactors = F)
+
+
+#Saving IDs in a vector for later
+test_labels <- test$PassengerId
+test$Id <- NULL
+train$Id <- NULL
+
+test$Survived <- NA
+all <- rbind(train, test)
+```
+
+# Exploratory Data Analysis
+
+```{r, include = FALSE}
+all$Pclass <- as.factor(all$Pclass)
+all$Survived <- as.factor(all$Survived)
+```
+
+
+## Survived
+
+Survived is the variable we are trying to predict. A passenger received a 1 if they survived and a 0 if they did not. 
+
+```{r, warning = FALSE, message= FALSE}
+all %>% 
+  filter(!is.na(Survived)) %>% 
+  ggplot(., aes(x=Survived)) + 
+  geom_bar(fill = 'blue') +
+  geom_label(stat = "count", aes(label = ..count..), y = 25) +
+  ylim(0, 600) +
+  xlab("Survived") +
+  ggtitle("Number of Survivors in Train dataset")
+```
+
+
+## Pclass
+
+Pclass is the type of ticket a passenger bought. 1 is upper class, 2 is middle class, and 3 is lower class.
+
+```{r, warning = FALSE, message= FALSE}
+tester <- all %>%
+  filter(!is.na(Survived)) %>%
+  group_by(Pclass, Survived) %>% 
+  dplyr::summarize(count = n())
+
+tester %>%
+  ggplot(., aes(x = Pclass, y = count, fill = Survived, label = count)) +
+  geom_bar(stat = "identity") +
+  geom_text(size = 3, position = position_stack(vjust = 0.5))
+
+tester %>%
+  ggplot(., aes(x = Pclass, y = count, fill = Survived, label = count)) +
+  geom_bar(stat = "identity", position = "fill") +
+  ylab("percent")
+
+all$Pclass <- as.numeric(all$Pclass)
+```
+
+
+## Sex
+
+Sex shows whether the passenger was a male or a female.
+
+```{r, warning = FALSE, message= FALSE}
+tester <- all %>%
+  filter(!is.na(Survived)) %>%
+  group_by(Sex, Survived) %>% 
+  dplyr::summarize(count = n())
+
+tester %>%
+  ggplot(., aes(x = Sex, y = count, fill = Survived, label = count)) +
+  geom_bar(stat = "identity") +
+  geom_text(size = 3, position = position_stack(vjust = 0.5))
+
+tester %>%
+  ggplot(., aes(x = Sex, y = count, fill = Survived, label = count)) +
+  geom_bar(stat = "identity", position = "fill") +
+  ylab("percent")
+```
+
+A lot of people these days like to claim, "Chivalry is dead." Maybe they're right. Almost 75% of woman survived while only about 20% of men did.
+
+
+## Age
+
+
+```{r, warning = FALSE, message= FALSE}
+# Create buckets of years
+tester <- all %>% 
+  filter(!is.na(Survived), !is.na(Age)) %>%
+  mutate(age_bins = cut(Age, breaks = c(0,5,9,14,19,29,39,49,59,69,79,89))) %>% 
+  group_by(age_bins, Survived) %>% 
+  dplyr::summarize(count = n())
+
+tester %>%
+  ggplot(., aes(x = age_bins, y = count, fill = Survived, label = count)) +
+  geom_bar(stat = "identity") +
+  geom_text(size = 3, position = position_stack(vjust = 0.5))
+
+tester %>%
+  ggplot(., aes(x = age_bins, y = count, fill = Survived, label = count)) +
+  geom_bar(stat = "identity", position = "fill") +
+  ylab("percent")
+  
+
+```
+
+I only see a small correlation in age, where the chance of survival goes down as a person's age increases. Children under the age of five had an especially high chance of survival.
+
+
+## SibSp
+
+```{r, warning = FALSE, message= FALSE}
+tester <- all %>%
+  filter(!is.na(Survived)) %>%
+  group_by(SibSp, Survived) %>% 
+  dplyr::summarize(count = n())
+
+tester %>%
+  ggplot(., aes(x = SibSp, y = count, fill = Survived, label = count)) +
+  geom_bar(stat = "identity") +
+  geom_text(size = 3, position = position_stack(vjust = 0.5))
+
+tester %>%
+  ggplot(., aes(x = as.factor(SibSp), y = count, fill = Survived, label = count)) +
+  geom_bar(stat = "identity", position = "fill") +
+  ylab("percent")
+```
+
+
+## Parch
+
+```{r, warning = FALSE, message= FALSE}
+tester <- all %>%
+  filter(!is.na(Survived)) %>%
+  group_by(Parch, Survived) %>% 
+  dplyr::summarize(count = n())
+
+tester %>%
+  ggplot(., aes(x = Parch, y = count, fill = Survived, label = count)) +
+  geom_bar(stat = "identity") +
+  geom_text(size = 3, position = position_stack(vjust = 0.5))
+
+tester %>%
+  ggplot(., aes(x = as.factor(Parch), y = count, fill = Survived, label = count)) +
+  geom_bar(stat = "identity", position = "fill") +
+  ylab("percent")
+
+```
+
+I do not see any correlation of survival in SibSp or Parch.
+
+
+## Fare
+
+```{r, warning = FALSE, message= FALSE}
+tester <- all %>% 
+  filter(!is.na(Survived), !is.na(Fare)) %>%
+  mutate(fare_bins = cut(Fare, breaks = c(-0.5,10,30,60,100,150,210,280,515))) %>% 
+  group_by(fare_bins, Survived) %>% 
+  dplyr::summarize(count = n())
+
+tester %>%
+  ggplot(., aes(x = fare_bins, y = count, fill = Survived, label = count)) +
+  geom_bar(stat = "identity") +
+  geom_text(size = 3, position = position_stack(vjust = 0.5))
+
+tester %>%
+  ggplot(., aes(x = fare_bins, y = count, fill = Survived, label = count)) +
+  geom_bar(stat = "identity", position = "fill")
+```
+
+This variable is essentially a more detailed version of Class. A passenger's chance of Survival increased if their ticket price was more expensive.
+
+## Embarked
+
+```{r, warning = FALSE, message= FALSE}
+tester <- all %>%
+  filter(!is.na(Survived)) %>%
+  group_by(Embarked, Survived) %>% 
+  dplyr::summarize(count = n())
+
+tester %>%
+  ggplot(., aes(x = Embarked, y = count, fill = Survived, label = count)) +
+  geom_bar(stat = "identity") +
+  geom_text(size = 3, position = position_stack(vjust = 0.5))
+
+tester %>%
+  ggplot(., aes(x = Embarked, y = count, fill = Survived, label = count)) +
+  geom_bar(stat = "identity", position = "fill") + 
+  ylab("percent")
+```
+
+Embarked looks to have no correlation with Survival.
+
+**Note**
+
+The variables Cabin and Name were not included in the EDA. Both are hard to plot and have no predictive power.
+
+# Fixing NA's and Outliers
+
+```{r, warning = FALSE, message= FALSE}
+NA_cols <- which(colSums(is.na(all)) > 0)
+sort(colSums(sapply(all[NA_cols], is.na)), decreasing = TRUE)
+cat('There are', length(NA_cols), 'columns with missing values')
+```
+
+Survived is the column we are predicting, so we need to deal with two columns of NA's
+
+## Fare
+
+Fare has 1 NA. A 60 year old male in third class with zero family members. I will impute this value with the median third class Fare.
+
+```{r, warning = FALSE, message= FALSE}
+all %>% 
+  filter(is.na(Fare))
+
+third <- all %>% 
+  filter(Pclass == 3, !is.na(Fare))
+median(third$Fare)
+
+all <- all %>% 
+  mutate(Fare = case_when(
+    is.na(Fare) ~ median(third$Fare),
+    .default = Fare
+    ))
+
+```
+
+## Age
+
+
+If I ordered by ticket number I could maybe go line by line and figure out if the person was a child or spouse or parent of other people who do have an age logged, but this would be impossible to do systematically, especially because Sibling/Spouse and Parent/Child are grouped together into single variables.
+
+I wondered if Fare and Age had any correlation for a chance to make a linear regression that imputes Age, but there's unfortunately no correlation.
+
+```{r, warning = FALSE, message= FALSE}
+ggplot(all, aes(x = Fare, y = Age)) +
+  geom_point() +
+  stat_smooth()
+
+```
+
+Maybe the age demographic is different in some ports? 
+
+```{r, warning = FALSE, message= FALSE}
+all %>% 
+  ggplot(., aes(x=as.factor(Embarked), y=Age)) + 
+    geom_boxplot()
+```
+
+Once again, no luck.
+
+I will impute each person's age based on the mean value from the other people listed on their ticket. This is not ideal but it's better than taking the mean value of everybody, and it's better than deleting the variable, as we saw that Age has strong predictive power in regards to the chance a young child survives.
+
+```{r, warning = FALSE, message= FALSE}
+## Imputes if passenger had other people with the same Ticket ID
+for (i in 1:nrow(all)){
+        if(is.na(all$Age[i])){
+               all$Age[i] <- as.numeric(mean(all$Age[all$Ticket==all$Ticket[i]], na.rm=TRUE)) 
+        }
+}
+
+## Imputes the median value for all passengers if passenger had no other people with the same Ticket ID
+
+for (i in 1:nrow(all)){
+        if(is.na(all$Age[i])){
+               all$Age[i] <- as.numeric(mean(all$Age, na.rm=TRUE)) 
+        }
+}
+```
+
+** Check to make sure NA's are taken care of.
+
+```{r, warning = FALSE, message= FALSE}
+NA_cols <- which(colSums(is.na(all)) > 0)
+sort(colSums(sapply(all[NA_cols], is.na)), decreasing = TRUE)
+cat('There are', length(NA_cols), 'columns with missing values')
+```
+
+We are left with NA's in only the response variable.
+
+
+
+# Variable Selection
+
+I am going to remove Cabin as it has way too many NAs and there's no good imputation method.
+
+```{r}
+all <- all %>% 
+  select(!Cabin)
+```
+
+Name also has no value.
+
+```{r}
+all <- all %>% 
+  select(!Name)
+```
+
+
+I was initially going to delete ticket, too, but on second thought I think it could have value. If six people in a big family survived, I bet the 7th one would too.
+
+# Modeling
+
+
+## One Hot Encoding
+
+We need to create dummy variables for the factors and characters.
+
+```{r, warning = FALSE, message= FALSE}
+dummies <- c("Sex", "Ticket", "Embarked")
+
+all_dummied <- fastDummies::dummy_cols(all, select_columns = dummies, remove_first_dummy = TRUE)
+all <- all_dummied %>% 
+  select(!any_of(dummies))
+
+train1 <- all %>% 
+  filter(!is.na(Survived))
+test1 <- all %>% 
+  filter(is.na(Survived))
+
+
+```
+
+## Balancing
+
+The dependent variable, Survived, is 1 about 38% of the time. In an ideal world our dataset would be 50/50. I tried various sample techniques with over/under sampling but none of them improved the performance of the model, so I will just leave the dataset how it is.
+
+## Train model
+
+```{r, warning = FALSE, message= FALSE}
+xgb_grid = expand.grid(
+nrounds = c(500, 1000,1500),
+eta = c(0.3,0.1, 0.05, 0.01),
+max_depth = c(2, 3, 4, 5, 6),
+gamma = 0,
+colsample_bytree=1,
+min_child_weight=c(1, 2, 3, 4 ,5),
+subsample=1
+)
+```
+
+The next step is to let caret find the best hyperparameter values (using 5 fold cross validation).
+
+```{r, warning = FALSE, message= FALSE}
+# set.seed(7)
+# my_control <-trainControl(method="cv", number=5)
+# xgb_caret <- train(x=train1[,-2], y=train1$Survived, method='xgbTree', trControl= my_control, tuneGrid=xgb_grid)
+# xgb_caret$bestTune
+```
+
+As expected, this took quite a bit of time (locally). In case you are running yourself I disabled the code, and am just continuing with the results. According to caret, the 'bestTune' parameters are:
+
+* nrounds = 500
+* Max_depth = 6
+* eta = 0.01
+* Min_child_weight = 1
+* gamma = 0
+
+Now we can train the model on the optimal parameters.
+
+```{r, warning = FALSE, message= FALSE}
+my_control <- trainControl(method = "none",
+                              verboseIter = TRUE,
+                              allowParallel = TRUE)
+final_grid <- expand.grid(nrounds = 500,
+                          eta = 0.01,
+                          max_depth = 6,
+                          gamma = 0,
+                          colsample_bytree = 1,
+                          min_child_weight = 1,
+                          subsample = 1
+                          )
+final_model <- train(x=train1[,-2],
+                     y=train1$Survived,
+                     method='xgbTree',
+                     trControl= my_control,
+                     tuneGrid=final_grid,
+                     verbose = TRUE)
+
+xgb.pred <- predict(final_model, test1)
+xgb.pred
+```
+
+# Final Predictions
+
+
+```{r, warning = FALSE, message= FALSE}
+final_preds <- data.frame(PassengerId = test_labels, Survived = xgb.pred)
+head(final_preds)
+write.csv(final_preds, file = 'final_predictions.csv', row.names = F)
+```
+
+After submitting to Kaggle, the predictions were 77% accurate.
+
+
